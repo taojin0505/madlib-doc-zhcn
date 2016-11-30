@@ -1,0 +1,30 @@
+1.安装postgresql（greenplum或者hawq，这里以postgresql为例）
+2.下载madlib源码
+    https://dist.apache.org/repos/dist/release/incubator/madlib/
+3.centos，osx可以根据官方文档安装：
+    https://cwiki.apache.org/confluence/display/MADLIB/Installation+Guide
+4.安装cmake
+    apt-get -y install cmake m4 gcc g++
+5.解压源码包，在源码包目录下执行一下命令编译安装
+    cmake .
+    make
+    make doc
+    sudo make install
+6.将madlib部署岛数据库（一定要用superuser）
+    /usr/local/madlib/bin/madpack -p postgres -c [user[/password]@][host][:port][/database] install
+  检查安装是否成功
+    /usr/local/madlib/bin/madpack -p postgres -c [user[/password]@][host][:port][/database] install -check
+7.将madlib使用权限赋予给普通用户
+    grant all privileges on schema madlib to user dev;
+
+问题：
+1.centos7g++包是gcc-c++，
+  我装完以后海域刀了找不到sunCC编译器的错，
+  which g++
+  cmake . -DCMAKE_CXX_COMPILER=/usr/bin/g++
+  解决
+2.ERROR : Cannot create language plpythonu. Stopping installation...
+  安装plpythou
+  yum install postgresql96-plpython
+  yum install postgresql96-python
+  service postgresql-9.6 restart

@@ -1,0 +1,37 @@
+Centos7/Centos6 service方式安装
+(注意把以下版本改成9.6)
+
+note1：最简单的方式当然是yum或者apt-get 直接install postgresql，但目前官方repo里面的postgresql还是早一点的版本（debian 8.6还是9.4版本），所以写了这个来安装最新的稳定版。
+note2：本安装步骤保证开箱即用，但要发挥postgresql的真正性能，请参考德哥文章《PostgreSQL on Linux 最佳部署手册》修改参数配置。url：https://github.com/digoal/blog/blob/master/201611/20161121_01.md
+freeBSD安装请参考《开源数据库 PostgreSQL 9.6.1 for FreeBSD 12 安装》
+url：https://my.oschina.net/ericliu77/blog/785804
+一键式安装脚本请参考：https://github.com/liu-shaobo/postgresql_install
+
+安装步骤：
+debian,ubuntu改一下repo
+1.下载并安装最新的yum repo
+https://www.postgresql.org/download/linux/redhat/
+或者：
+yum install http://yum.postgresql.org/9.6/redhat/rhel-7-x86_64/pgdg-redhat95-9.6-1.noarch.rpm
+2.安装postgresql
+yum install postgresql96-server postgresql96-contrib postgresql96-devel postgresql96-python postgresql96-plpython
+3.初始化数据库
+service postgresql-9.6 initdb
+不行的话用这个
+/usr/pgsql-9.6/bin/postgresql96-setup initdb
+4.将数据库加入自启
+chkconfig postgresql-9.6 on service postgresql-9.6 start
+5.设置访问白名单
+cd /var/lib/pgsql/9.6/data
+vim pg_hba.conf
+6.设置管理员密码
+alter user postgres with password 'postgres';
+7.配置参数
+vim pogresql.conf
+8.创建用户
+create user superadmin with superuser password '123456' CREATEEXTTABLE;
+9.创建数据库
+create database cdn;
+10.赋予操作数据库权限
+grant all privileges on database cdn to dev;
+

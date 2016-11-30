@@ -1,0 +1,209 @@
+数组操作
+
+下面的算法由c实现，在一些机器学习算法中能提供快速的数组操作。
+
+使用注意：
+这里介绍的所有函数（除了 normalize() 和 array_filter()）都工作于二维数组
+支持的字段类型：
+    SMALLINT
+    INTEGER
+    BIGINT
+    REAL
+    DOUBLE PRECISION (FLOAT8)
+    NUMERIC (内部会被自动转换到 FLOAT8, 可能会丢失精度)
+一些函数有非 NULL 值限制，其他的函数会忽略掉NULL。
+
+array_add()
+两个数组相加。要求所有值NON-NULL，返回类型和输入类型相同。
+
+sum()	
+求和，元素的和向量（sums vector element-wisely），要求所有值NON-NULL，返回类型和输入类型相同。
+
+array_sub()	
+数组减法，要求所有值NON-NULL，返回类型和输入类型相同。
+
+array_mult()
+数组的元素乘积（Element-wise product of two arrays），要求所有值NON-NULL，返回类型和输入类型相同。
+
+array_div()	
+数组的元素相除（Element-wise division of two arrays），要求所有值NON-NULL，返回类型和输入类型相同。
+
+array_dot()	
+数组的点积（a·b=a1b1+a2b2+……+anbn），要求所有值NON-NULL，返回类型和输入类型相同。
+
+array_contains()
+检查某个数组是否包含另一数组，如果右边数组的每个非0项和左边数组的相同位置的项相等，返回TRUE
+Checks whether one array contains the other. This function returns TRUE if each non-zero element in the right array equals to the element with the same index in the left array.
+
+array_max()	
+查找数组中的最大值，NULL被忽略，返回类型和输入类型相同
+
+array_max_index()
+查找数组中的最大值及其索引。返回值格式为[max, index]，NULL被忽略，返回类型和输入类型相同
+
+array_min()	
+查找数组中的最小值，NULL被忽略，返回类型和输入类型相同
+
+array_min_index()	
+查找数组中的最小值及其索引。返回值格式为[min, index]，NULL被忽略，返回类型和输入类型相同
+
+array_sum()	
+计算数组中的值的和，NULL被忽略，返回类型和输入类型相同。
+
+array_sum_big()	
+计算数组中的值的和，NULL被忽略，返回类型总是FLOAT8而忽略输入类型。它等同于array_sum()但当结果可能溢出element类型的时候可以用它。
+
+array_abs_sum()	
+计算数组中的值的绝对值abs的和，NULL被忽略，返回类型和输入类型相同。
+
+array_abs()	
+输入数组并计算数组中每个element的绝对值abs。返回结果数组，要求所有值NON-NULL.
+
+array_mean()
+计算数组中的值的平均值mean，NULL被忽略。
+
+array_stddev()	
+计算数组中的值的标准差standard deviation，NULL被忽略。
+
+array_of_float()
+创建一个参数指定大小的FLOAT8数组，所有值初始化为0.0
+
+array_of_bigint()
+创建一个参数指定大小的FBIGINT数组，所有值初始化为0.0
+
+array_fill()
+使用指定的值填充数组所有值
+
+array_filter()
+将一个数组作为输入，保留那些在指定位置符合判断的element（keep only elements that satisfy the operator on specified scalar）。要求数组是一维数组，所有值NON-NULL，返回值和输入值相同。默认情况下，该函数删除所有0.
+函数定义：
+\df madlib.array_filter
+                                   List of functions
+ Schema |     Name     | Result data type |        Argument data types        |  Type  
+--------+--------------+------------------+-----------------------------------+--------
+ madlib | array_filter | anyarray         | x anyarray                        | normal
+ madlib | array_filter | anyarray         | x anyarray, k anyelement          | normal
+ madlib | array_filter | anyarray         | x anyarray, k anyelement, op text | normal
+
+array_scalar_mult()	
+输入一个数组，将数组中每个值和第二个参数相乘(executes element-wise multiplication by the scalar provided as the second argument)，返回结果数组。要求所有值NON-NULL,返回值和输入值相同。
+SELECT madlib.array_scalar_mult(ARRAY[1,3,5],4);
+ array_scalar_mult 
+-------------------
+ {4,12,20}
+(1 row)
+
+array_scalar_add()
+输入一个数组，将数组中每个值和第二个参数相加(executes element-wise addition of the scalar provided as the second argument)，返回结果数组。要求所有值NON-NULL,返回值和输入值相同。
+
+array_sqrt()
+输入一个数组，计算数组中每个element的平方根square root(finds square root of each element in the array)，返回结果数组。要求所有值NON-NULL,返回值和输入值相同。
+
+array_pow()
+输入一个数组和一个float8值（貌似要求所有输入值类型相同），计算数组中每个element的N（N为第二个参数）次方。返回结果数组。要求所有值NON-NULL,返回值和输入值相同。
+SELECT madlib.array_pow(ARRAY[1,3,5],4);
+ array_pow  
+------------
+ {1,81,625}
+(1 row)
+SELECT madlib.array_pow(ARRAY[1.1,3.2,5.0],-4.1);
+                         array_pow                          
+------------------------------------------------------------
+ {0.67653456609147,0.00848955817878459,0.00136214387603326}
+ 
+array_square()
+输入一个数组，计算数组中每个element中的平方，返回结果数组。要求所有值NON-NULL。
+SELECT madlib.array_square(ARRAY[1.1,3.2,5.0]);
+  array_square   
+-----------------
+ {1.21,10.24,25}
+
+normalize()
+正规化normalize一个数组，平方和为1（This function normalizes an array as sum of squares to be 1）.要求数组1维，所有值NON-NULL。
+例如：
+正规化
+SELECT madlib.normalize(ARRAY[1.1,3.2,5.0]);
+                       normalize                        
+--------------------------------------------------------
+ {0.182198131499983,0.53003092799995,0.828173324999922}
+求平方
+SELECT madlib.array_square(madlib.normalize(ARRAY[1.1,3.2,5.0]));
+                       array_square                       
+----------------------------------------------------------
+ {0.0331961591220851,0.280932784636488,0.685871056241427}
+求和
+SELECT madlib.array_sum(madlib.array_square(madlib.normalize(ARRAY[1.1,3.2,5.0])));
+ array_sum 
+-----------
+         1
+
+例子：
+CREATE TABLE array_tbl ( id integer,
+                         array1 integer[],
+                         array2 integer[]
+                       );
+INSERT INTO array_tbl VALUES
+                       ( 1, '{1,2,3,4,5,6,7,8,9}', '{9,8,7,6,5,4,3,2,1}' ),
+                       ( 2, '{1,1,0,1,1,2,3,99,8}','{0,0,0,-5,4,1,1,7,6}' );
+数据存储
+select * from array_tbl;
+ id |        array1        |        array2        
+----+----------------------+----------------------
+  1 | {1,2,3,4,5,6,7,8,9}  | {9,8,7,6,5,4,3,2,1}
+  2 | {1,1,0,1,1,2,3,99,8} | {0,0,0,-5,4,1,1,7,6}
+(2 rows)
+
+
+SELECT id, madlib.array_min(array1), madlib.array_max(array1),
+           madlib.array_min_index(array1), madlib.array_max_index(array1),
+           madlib.array_mean(array1), madlib.array_stddev(array1)
+FROM array_tbl;
+结果
+id | array_min | array_max | array_min_index | array_max_index |    array_mean    |   array_stddev
+----+-----------+-----------+---------------+---------------+------------------+------------------
+  1 |         1 |         9 | {1,1}         | {9,9}         |                5 | 2.73861278752583
+  2 |         0 |        99 | {0,3}         | {99,8}        | 12.8888888888889 | 32.3784050118457(2 rows)
+
+SELECT id, madlib.array_add(array1,array2),
+          madlib.array_sub(array1,array2)
+FROM array_tbl;
+结果：
+ id |          array_add           |        array_sub
+ ---+------------------------------+-------------------------
+  2 | {1,1,0,-4,5,3,4,106,14}      | {1,1,0,6,-3,1,2,92,2}
+  1 | {10,10,10,10,10,10,10,10,10} | {-8,-6,-4,-2,0,2,4,6,8}
+(2 rows)
+
+SELECT id, madlib.array_mult(array1,array2),
+           madlib.array_div(array1,array2)
+FROM array_tbl
+WHERE 0 != ALL(array2);
+结果：
+ id |         array_mult         |      array_div
+ ---+----------------------------+---------------------
+  1 | {9,16,21,24,25,24,21,16,9} | {0,0,0,0,1,1,2,4,9}
+(1 row)
+
+SELECT id, madlib.array_dot(array1, array2)
+FROM array_tbl;
+结果：
+ id | array_dot
+ ---+----------
+  2 |       745
+  1 |       165
+
+SELECT id, madlib.array_scalar_mult(array1,3)
+FROM array_tbl;
+结果：
+ id |     array_scalar_mult
+ ---+--------------------------
+  1 | {3,6,9,12,15,18,21,24,27}
+  2 | {3,3,0,3,3,6,9,297,24}
+(2 rows)
+
+SELECT madlib.array_fill(madlib.array_of_float(9), 1.3::float);
+结果
+              array_fill
+ --------------------------------------
+ {1.3,1.3,1.3,1.3,1.3,1.3,1.3,1.3,1.3}
+(1 row)

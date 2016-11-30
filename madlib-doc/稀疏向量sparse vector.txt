@@ -1,0 +1,299 @@
+稀疏向量sparse vectors 简称svec
+
+在实数数组float array的计算中有时候要处理大量的0或者其它默认值。这种情况在科学计算，零售优化（retail optimization），文本处理中大量出现。每个实数float需要在内存或者磁盘上占用8 byte，所以节省这些0值的空间就变得变的有必要。
+
+如下double数据在pg中的数据类型是float8[]
+'{0, 33,...4万个0..., 12, 22 }'::float8[]
+这个数组会占用大约320kB的内存/磁盘，大部分数值都是0.即使我们使用null bitmap将0存为null，仍然需要使用一个5KB的null bitmap。在这个数组上执行计算时，也会在这40000个0的字段上浪费计算资源
+
+使用svec来解决这个问题，它使用RLE(Run Length Encoding)模式来将稀疏向量(sparse vectors)表示为“次数-值”数值对数组(pairs of count-value arrays).比如，上述数组可以表示为：
+'{1,1,40000,1,1}:{0,33,0,12,22}'::madlib.svec
+表示1次0,1次33，40000次0,1次12,1次22.仅仅用了5个integer和5个float就表示了数组。RLE表示在计算时更容易使用vector操作来让运算更快。SVEC模块为实现该功能提供了库。
+
+当前版本仅支持float8的稀疏向量
+
+使用稀疏向量
+SVEC能够使用以下表达式来直接构造：
+SELECT '{n1,n2,...,nk}:{v1,v2,...vk}'::madlib.svec;
+n1,n2...表示值v1,v2...的个数
+float array通过以下方式被转换成SVEC
+SELECT ('{v1,v2,...vk}'::float[])::madlib.svec;
+可以使用aggregation来生成SVEC
+SELECT madlib.svec_agg(v1) FROM generate_series(1,k);
+可以使用madlib.svec_cast_positions_float8arr() 函数，同时提供一个position array，一个在那些位置的value array来生成SVEC。
+SELECT madlib.svec_cast_positions_float8arr(
+    array[n1,n2,...nk],    -- positions of values in vector
+    array[v1,v2,...vk],    -- values at each position
+    length,                -- length of vector
+    base)                  -- value at unspecified positions
+例如：
+SELECT madlib.svec_cast_positions_float8arr(
+    array[1,3,5],
+    array[2,4,6],
+    10,
+    0.0)
+生成SVEC
+ svec_cast_positions_float8arr
+  ------------------------------
+ {1,1,1,1,1,5}:{2,0,4,0,6,0}
+
+文档向量化到稀疏向量
+这个模块实现了一个文档向量化的有效方式，将文本text文档转换到稀疏向量表示(MADlib.svec), 需要使用madlib中不同的ml算法
+
+这个功能接受两张表作为输入，字典表dictionary table和文档表documents table，生成包含稀疏向量指定的输出表来表示（documents table中的）文档
+
+madlib.gen_doc_svecs(output_tbl,
+                     dictionary_tbl,
+                     dict_id_col,
+                     dict_term_col,
+                     documents_tbl,
+                     doc_id_col,
+                     doc_term_col,
+                     doc_term_info_col
+                    )
+参数：
+output_tbl
+    表示该文档，包含稀疏向量的输出表名的TEXT.Name，有以下列：
+    doc_id	__TYPE_DOC__. Document id. 
+            __TYPE_DOC__:列的类型取决于documents_tbl中的doc_id_col
+    sparse_vector	MADlib.svec. Corresponding sparse vector representation.
+
+dictionary_tbl
+    包含特征features的dictionary table的TEXT.Name
+    dict_id_col	dictionary_tbl中的id 列的TEXT. Name. 
+        类型: INTEGER 或 BIGINT.
+        注意：值必须是连续的从0刀n，n为字典总数-1
+    dict_term_col	dictionary_tbl中含有项（term (features)）的TEXT. Name.
+
+documents_tbl
+    表示文档的文档表(documents table)的TEXT. Name.
+    doc_id_col	        documents_tbl中的id列的TEXT. Name.
+    doc_term_col	    documents_tbl中的项(term)列的TEXT. Name.
+    doc_term_info_col	documents_tbl中的项的信息(term info)列的TEXT.Name.该列的类型必须为: 
+        - INTEGER, BIGINT or DOUBLE PRECISION:值直接被用于生成向量(vector). 
+        - ARRAY: 数组的长度被用于生成向量(vector).
+
+例子A：
+假设某种语言库由一些文档集组成，文档由一些带有doc id的特征(features (terms))组成：
+	1, {this,is,one,document,in,the,corpus}
+	2, {i,am,the,second,document,in,the,corpus}
+	3, {being,third,never,really,bothered,me,until,now}
+	4, {the,document,before,me,is,the,third,document}
+
+1.准备对应格式的文档表
+SELECT * FROM documents_table ORDER BY id;的结果为：
+（左边的doc_term_info_col列count为INTEGER，右边的doc_term_info_col列count为ARRAY）
+  id |   term   | count                 id |   term   | positions
+ ----+----------+-------               ----+----------+-----------
+   1 | is       |     1                  1 | is       | {1}
+   1 | in       |     1                  1 | in       | {4}
+   1 | one      |     1                  1 | one      | {2}
+   1 | this     |     1                  1 | this     | {0}
+   1 | the      |     1                  1 | the      | {5}
+   1 | document |     1                  1 | document | {3}
+   1 | corpus   |     1                  1 | corpus   | {6}
+   2 | second   |     1                  2 | second   | {3}
+   2 | document |     1                  2 | document | {4}
+   2 | corpus   |     1                  2 | corpus   | {7}
+   . | ...      |    ..                  . | ...      | ...
+   4 | document |     2                  4 | document | {1,7}
+2.准备恰当格式的词典表
+SELECT * FROM dictionary_table ORDER BY id;
+  id |   term
+ ----+----------
+   0 | am
+   1 | before
+   2 | being
+   3 | bothered
+   4 | corpus
+   5 | document
+   6 | i
+   7 | in
+   8 | is
+   9 | me
+...
+3.使用dictionary_table和documents_table生成稀疏向量
+doc_term_info_col (count)类型为INTEGER：
+SELECT * FROM madlib.gen_doc_svecs('svec_output', 'dictionary_table', 'id','term','documents_table', 'id', 'term', 'count');
+doc_term_info_col (count)类型为ARRAY：
+SELECT * FROM madlib.gen_doc_svecs('svec_output', 'dictionary_table', 'id', 'term','documents_table', 'id', 'term', 'positions');
+结果为：
+                                 gen_doc_svecs
+ --------------------------------------------------------------------------------------
+ Created table svec_output (doc_id, sparse_vector) containing sparse vectors
+(1 row)
+4.查看生成的稀疏向量
+SELECT * FROM svec_output ORDER by doc_id;
+ doc_id |                  sparse_vector
+ --------+-------------------------------------------------
+      1 | {4,2,1,2,3,1,2,1,1,1,1}:{0,1,0,1,0,1,0,1,0,1,0}
+      2 | {1,3,4,6,1,1,3}:{1,0,1,0,1,2,0}
+      3 | {2,2,5,3,1,1,2,1,1,1}:{0,1,0,1,0,1,0,1,0,1}
+      4 | {1,1,3,1,2,2,5,1,1,2}:{0,1,0,2,0,1,0,2,1,0}
+(4 rows)
+
+例子B：
+稀疏向量sevc可以使用<, >, *, **, /, =, +, SUM等操作符，他们都具有某种向量操作。
+例如加号(+)两个向量中在相同维度每个项（term）相加
+SELECT ('{0,1,5}'::float8[]::madlib.svec +'{4,3,2}'::float8[]::madlib.svec)::float8[];
+结果：
+ float8
+ --------
+ {4,4,7}
+两个向量的标量积（%*%）会得到一个float8类型的值，以下结果标量积为：(0*4 + 1*3 + 5*2) = 13
+SELECT '{0,1,5}'::float8[]::madlib.svec %*% '{4,3,2}'::float8[]::madlib.svec;
+ ?column?
+ ---------
+    13
+专用的向量聚合函数一样有效，sum和字面意思一样，SVEC_COUNT_NONZERO对n维稀疏向量中的每个列中非0项(term)求count，返回一个有列数的稀疏向量sevc。例如：
+
+CREATE TABLE list (a madlib.svec);
+INSERT INTO list VALUES ('{0,1,5}'::float8[]), ('{10,0,3}'::float8[]), ('{0,0,3}'::float8[]),('{0,1,0}'::float8[]);
+SELECT madlib.svec_count_nonzero(a)::float8[] FROM list;
+
+svec_count_nonzero
+ ----------------
+    {1,2,3}
+
+在svec类型中没有使用null bitmap，null只稀疏向量中表示为NVP (No Value Present)，例如：
+SELECT '{1,2,3}:{4,null,5}'::madlib.svec;
+结果为：
+      svec
+ ------------------
+ {1,2,3}:{4,NVP,5}
+
+加法运算：
+SELECT '{1,2,3}:{4,null,5}'::madlib.svec + '{2,2,2}:{8,9,10}'::madlib.svec;
+         ?column?
+  -------------------------
+  {1,2,1,2}:{12,NVP,14,15}
+
+稀疏向量sevc中的单项值能够通过 svec_proj()函数访问，参数为稀疏向量sevc和希望访问的单项值的index值，如：
+SELECT madlib.svec_proj('{1,2,3}:{4,5,6}'::madlib.svec, 1) + madlib.svec_proj('{4,5,6}:{1,2,3}'::madlib.svec, 15);
+
+ ?column?
+ ---------
+    7
+能够通过 svec_subvec()函数访问稀疏向量sevc的子向量，参数为稀疏向量sevc和希望访问的开始，结束index值，如：
+SELECT madlib.svec_subvec('{2,4,6}:{1,3,5}'::madlib.svec, 2, 11);
+   svec_subvec
+ ----------------
+ {1,4,5}:{1,3,5}
+单项值和子向量能够使用svec_change()函数修改。它有3个参数，m维稀疏向量 sv1，start index j，n维稀疏向量sv2，j+n-1<=m,返回一个类似于sv1的稀疏向量但是子向量sv1[j:j+n-1]被sv2替换掉。例如：
+SELECT madlib.svec_change('{1,2,3}:{4,5,6}'::madlib.svec,3,'{2}:{3}'::madlib.svec);
+     svec_change
+ --------------------
+ {1,1,2,2}:{4,5,3,6}
+其它函数，例如和R中的lapply()一样的：
+SELECT madlib.svec_lapply('sqrt', '{1,2,3}:{4,5,6}'::madlib.svec);
+                  svec_lapply
+ ----------------------------------------------
+ {1,2,3}:{2,2.23606797749979,2.44948974278318}
+
+完整的函数列表在svec.sql-in中。
+
+例子C
+在一个文本分类的例子中，假设有一个由有序文本数组组成的词典
+CREATE TABLE features (a text[]);
+INSERT INTO features VALUES
+            ('{am,before,being,bothered,corpus,document,i,in,is,me,
+               never,now,one,really,second,the,third,this,until}');
+
+我们还有一些文档，每个都表示城word的数组
+CREATE TABLE documents(a int,b text[]);
+INSERT INTO documents VALUES
+            (1,'{this,is,one,document,in,the,corpus}'),
+            (2,'{i,am,the,second,document,in,the,corpus}'),
+            (3,'{being,third,never,really,bothered,me,until,now}'),
+            (4,'{the,document,before,me,is,the,third,document}');
+
+我们现在有词典（features表）和文档（documents表），我们在单词次数和每个文档中字典单词的比例上使用向量计算进行文档分类。
+
+要开始这种处理，需要找到每个文档中的词典单词。我们会为每个文档创建稀疏特征向量(Sparse Feature Vector or SFV).SVF是一个n维向量，n是词典中的word个数，在SVF每个单元cell是文档中每个word的个数
+在稀疏向量lib中，有函数可以从文档中创建SVF（更高效，特别是数据量打的时候，参考http://madlib.incubator.apache.org/docs/v1.9/group__grp__svec.html#vectorization）
+SELECT madlib.svec_sfv((SELECT a FROM features LIMIT 1),b)::float8[]
+         FROM documents;
+
+                svec_sfv
+ ----------------------------------------
+ {0,0,0,0,1,1,0,1,1,0,0,0,1,0,0,1,0,1,0}
+ {0,0,1,1,0,0,0,0,0,1,1,1,0,1,0,0,1,0,1}
+ {1,0,0,0,1,1,1,1,0,0,0,0,0,0,1,2,0,0,0}
+ {0,1,0,0,0,2,0,0,1,1,0,0,0,0,0,2,1,0,0}
+ 
+注意madlib.svec_sfv()输出是一个每个文档的稀疏向量，包含每个词典的word(按照词典中的位置)的count值。结合特征feature向量和文本更容易理解以上结果：
+SELECT madlib.svec_sfv((SELECT a FROM features LIMIT 1),b)::float8[], b FROM documents;
+                svec_sfv                 |                        b
+ ----------------------------------------+--------------------------------------------------
+ {1,0,0,0,1,1,1,1,0,0,0,0,0,0,1,2,0,0,0} | {i,am,the,second,document,in,the,corpus}
+ {0,1,0,0,0,2,0,0,1,1,0,0,0,0,0,2,1,0,0} | {the,document,before,me,is,the,third,document}
+ {0,0,0,0,1,1,0,1,1,0,0,0,1,0,0,1,0,1,0} | {this,is,one,document,in,the,corpus}
+ {0,0,1,1,0,0,0,0,0,1,1,1,0,1,0,0,1,0,1} | {being,third,never,really,bothered,me,until,now}
+SELECT * FROM features;
+                                                a
+ -------------------------------------------------------------------------------------------------------
+{am,before,being,bothered,corpus,document,i,in,is,me,never,now,one,really,second,the,third,this,until}
+对于文档，"i am the second document in the corpus",SFV 是{1,3*0,1,1,1,1,6*0,1,2}，am是字典顺序中的第一个词，在文档中只有1个，所以在SVF中用1表示它。before在文档中没有出现，值是0，the出现2次，值是2.
+函数madlib.svec_sfv() 能够并行处理数量更大的文档到SFV。
+
+
+
+接下来的的分类处理步骤都是向量数学（vector math）。实际总量(count)几乎不再被使用。它变成权重。最常用的权重称为tf/idf,表示Term Frequency / Inverse Document Frequency。在一个文档对指定的项termi计算公式为：
+{#Times in document} * log {#Documents / #Documents the term appears in}.
+例如，项"document"在文档A中权重为1*log(4/3),在文档D中权重为2*log(4/3).那么"document"在每个文档中出现的tf/idf权重为0，因为log(4/4)=0.这样通常会产生很多0.
+
+对于这部分处理，我们需要得到一个词典维度的稀疏向量，里面的值是
+log(#documents/#Documents each term appears in).
+对所有文档（也称语言集corpus），都有一个这样的向量。#document是所有文档的数量count。在这个例子中是4，但是每个词典word有一个除数，值为文档中word出现次数。但是对每一个词典中的单词dictionary word有一个除数，值是所有出现该词文档的总数(its value is the count of all the times that word appears in the document原文是这个，感觉理解起来有歧义，最后和公式对比了下)。整个语言集corpus的单向量(single vector)能够和每个文档的SVF相乘得到标量积来生成Term Frequency/Inverse Document Frequency 权重。
+例如下面例子：
+CREATE TABLE corpus AS
+            (SELECT a, madlib.svec_sfv((SELECT a FROM features LIMIT 1),b) sfv
+         FROM documents);
+创建文档的稀疏特征向量SFV，结果：
+select * from corpus;
+ a |                       sfv                       
+---+-------------------------------------------------
+ 1 | {4,2,1,2,3,1,2,1,1,1,1}:{0,1,0,1,0,1,0,1,0,1,0}
+ 2 | {1,3,4,6,1,1,3}:{1,0,1,0,1,2,0}
+ 3 | {2,2,5,3,1,1,2,1,1,1}:{0,1,0,1,0,1,0,1,0,1}
+ 4 | {1,1,3,1,2,2,5,1,1,2}:{0,1,0,2,0,1,0,2,1,0}
+(4 rows)
+
+CREATE TABLE weights AS
+          (SELECT a docnum, madlib.svec_mult(sfv, logidf) tf_idf
+           FROM (SELECT madlib.svec_log(madlib.svec_div(count(sfv)::madlib.svec,madlib.svec_count_nonzero(sfv))) logidf
+                FROM corpus) foo, corpus ORDER BY docnum);
+权重结果为：
+select * from weights;
+ docnum |                                                                          tf_idf                               
+                                           
+--------+----------------------------------------------------------------------------------------------------------------------------------------------------------
+      1 | {4,1,1,1,2,3,1,2,1,1,1,1}:{0,0.693147180559945,0.287682072451781,0,0.693147180559945,0,1.38629436111989,0,0.287682072451781,0,1.38629436111989,0}
+      2 | {1,3,1,1,1,1,6,1,1,3}:{1.38629436111989,0,0.693147180559945,0.287682072451781,1.38629436111989,0.693147180559945,0,1.38629436111989,0.575364144903562,0}
+      3 | {2,2,5,1,2,1,1,2,1,1,1}:{0,1.38629436111989,0,0.693147180559945,1.38629436111989,0,1.38629436111989,0,0.693147180559945,0,1.38629436111989}
+      4 | {1,1,3,1,2,2,5,1,1,2}:{0,1.38629436111989,0,0.575364144903562,0,0.693147180559945,0,0.575364144903562,0.693147180559945,0}
+(4 rows)
+
+现在能够使用文档向量的标量积（dot product）的反余弦值(acos)来得到某个文档(document)和其它文档之间的 "angular distance"（夹角）。下面计算第一个文档和其他文档之间的angular distance：
+SELECT docnum,
+                180. * ( ACOS( madlib.svec_dmin( 1., madlib.svec_dot(tf_idf, testdoc)
+                    / (madlib.svec_l2norm(tf_idf)*madlib.svec_l2norm(testdoc))))/3.141592654) angular_distance
+         FROM weights,(SELECT tf_idf testdoc FROM weights WHERE docnum = 1 LIMIT 1) foo
+         ORDER BY 1;
+结果为：
+docnum | angular_distance
+ -------+------------------
+     1 |                0
+     2 | 78.8235846096986
+     3 | 89.9999999882484
+     4 | 80.0232034288617
+
+文档1和它自己的angular distance是0度。文档1和3是90度，因为他们没有任何相同的特征(share no features at all)。angular distance被引入机器学习算法靠的是数据点之间的距离度量distance measure。
+
+SVEC也能够将数组声明表示的向量转化为svec。下面的例子中第一个数值数组表示实数数组2中每个数字的所在位置。第三个值表示需要的最大数组空间。如果max_size<1，值被忽略，数组会在位置向量的最后位置结束。最后值是实数数组中那些没有表示出来的值的默认值值(填充值)（这段英文文档写的莫名其妙，自己根据延时结果推导出来的）
+SELECT madlib.svec_cast_positions_float8arr(ARRAY[1,2,7,5,87],ARRAY[.1,.2,.7,.5,.87],90,0.0);
+结果，第1位0.1，第二位0.2，第7位0.7，第5位0.5，第87位0.87：
+       svec_cast_positions_float8arr
+ ----------------------------------------------------
+{1,1,2,1,1,1,79,1,3}:{0.1,0.2,0,0.5,0,0.7,0,0.87,0}
+(1 row)
