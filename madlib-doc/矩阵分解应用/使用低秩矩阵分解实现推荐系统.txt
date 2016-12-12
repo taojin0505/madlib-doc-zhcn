@@ -1,0 +1,176 @@
+--以下使用ml-100k为例，查看记录
+--文件下载http://grouplens.org/datasets/movielens/
+--movieid不连续，所以整理了一下，避免再后面生成太多不必要的数据
+--评分数据事实上是一个稀疏矩阵，每一行都是某个用户对某部电影的投票，所以在进行分解前，不需要进行矩阵转换计算，如果原表中user和movie都是文本的话，需要增加两列userid和movieid，将文本名称转换成从1开始的sequence id。
+alter table ml.ratings_100k add column mlid int;
+create table ml.ratings100kid(movieid int,mlid int);
+create table ml.ratings100kid2(movieid int,mlid int);
+insert into ml.ratings100kid select distinct movieid from ml.ratings_100k;
+insert into ml.ratings100kid2  select movieid,rank() over(order by movieid) from ml.ratings100kid；
+update ml.ratings_100k t set mlid=(select mlid from ml.ratings100kid2 s where t.movieid=s.movieid);
+--加工以后的数据
+select * from ml.ratings_100k limit 10;
+ userid | movieid | rating | timestamp_epoch | mlid 
+--------+---------+--------+-----------------+------
+      1 |      31 |    2.5 |      1260759144 |   31
+      1 |    1029 |    3.0 |      1260759179 |  834
+      1 |    1061 |    3.0 |      1260759182 |  860
+      1 |    1129 |    2.0 |      1260759185 |  907
+
+--分解原矩阵
+--矩阵分解以后，将得到两个矩阵matrix_u和matrix_v，将二者相乘即可还原数据，还可以得到那些评分为空的电影的预估数据
+SELECT madlib.lmf_igd_run( 'rating_100k_model',
+                           'ml.ratings_100k',
+                           'userid',
+                           'mlid',
+                           'rating',
+                           671,
+                           9066,
+                           80,
+                           0.02,
+                           0.1,
+                           30,
+                           1e-4
+                         );
+                         
+SELECT madlib.array_dot(matrix_u[10:10][1:80],matrix_v[311:311][1:80]) from rating_100k_model;
+    array_dot     
+------------------
+ 3.95211515441752
+select * from ml.ratings_100k where userid=10 and mlid=311;                                   
+ userid | movieid | rating | timestamp_epoch | mlid 
+--------+---------+--------+-----------------+------
+     10 |     345 |    4.0 |       942766603 |  311
+
+--还原矩阵
+--创建稀疏矩阵（为了方便数据处理和sql执行，格式和原矩阵类似）
+create table ratings100kml(useid int,mlid int,rating float8);
+SELECT array_length(matrix_u) from rating_100k_model;
+SELECT madlib.array_dot(matrix_u[10:10][1:80],matrix_v[311:311][1:80]) from rating_100k_model;
+
+--取出每个向量相乘以后得到原来的值
+CREATE OR REPLACE FUNCTION get_rating(rownum int,colnum int,rank int,tbname text) RETURNS void
+AS $$
+DECLARE
+  rowid int8 := 1;
+  colid int8 := 1;
+  x float8;
+BEGIN
+  WHILE rowid <= rownum
+  LOOP
+    raise notice 'calculate row % ',rowid;
+    colid := 1;
+    WHILE colid <= colnum
+    LOOP
+      execute 'SELECT madlib.array_dot(matrix_u['||rowid||':'||rowid||'][1:'||rank||'],matrix_v['||colid||':'||colid||'][1:'||rank||']) from '||tbname::regclass||';' into x;
+      --raise notice 'value row % ,col %  rating %',rowid,colid,x;
+      insert into ratings100kml values(rowid,colid,x);
+      colid := colid + 1;
+    END LOOP;
+    
+    rowid:=rowid+1;
+    
+  END LOOP;
+  RETURN;
+END;
+$$ LANGUAGE plpgsql;
+
+--展示出某个用户评分前10的电影
+select t.useid,t.rating,s.title,s.genres from ratings100kml t ,ml.ratings100kid2 r,ml.movies s where t.mlid=r.mlid and r.movieid=s.movieid and  t.useid=1  order by rating desc limit 10;
+ useid |      rating      |                           title                            |             genres             
+ 
+-------+------------------+------------------------------------------------------------+--------------------------------
+-
+     1 | 3.90578075686691 | Braveheart (1995)                                          | Action|Drama|War
+     1 | 3.88593435780966 | Cinema Paradiso (Nuovo cinema Paradiso) (1989)             | Drama
+     1 | 3.87207228386002 | Dracula (Bram Stoker's Dracula) (1992)                     | Fantasy|Horror|Romance|Thriller
+     1 | 3.82464143998219 | Prime of Miss Jean Brodie, The (1969)                      | Drama
+     1 |  3.8060989867013 | Philomena (2013)                                           | Comedy|Drama
+     1 | 3.79989898287122 | Usual Suspects, The (1995)                                 | Crime|Mystery|Thriller
+     1 | 3.77379718336724 | Maya Lin: A Strong Clear Vision (1994)                     | Documentary
+     1 | 3.75268047046594 | Hachiko: A Dog's Story (a.k.a. Hachi: A Dog's Tale) (2009) | Drama
+     1 | 3.73962711376253 | 40-Year-Old Virgin, The (2005)                             | Comedy|Romance
+     1 | 3.73465800081345 | Almost Famous (2000)                                       | Drama
+
+和用户自己投票的对比
+select round(u.rating::numeric,1) as rating,coalesce(v.rating,0) as voterating,u.movieid,u.title,u.genres
+from
+(select t.useid,t.rating,s.movieid,s.title,s.genres from ratings100kml t ,ml.ratings100kid2 r,ml.movies s where t.mlid=r.mlid and r.movieid=s.movieid and  t.useid=1  order by rating desc limit 10) u left join ml.ratings_100k v
+on u.useid=v.userid  
+and u.movieid=v.movieid
+order by u.rating desc;
+ rating | voterating | movieid |                           title                            |             genres        
+      
+--------+------------+---------+------------------------------------------------------------+---------------------------
+------
+    3.9 |          0 |     110 | Braveheart (1995)                                          | Action|Drama|War
+    3.9 |        4.0 |    1172 | Cinema Paradiso (Nuovo cinema Paradiso) (1989)             | Drama
+    3.9 |        3.5 |    1339 | Dracula (Bram Stoker's Dracula) (1992)                     | Fantasy|Horror|Romance|Thr
+iller
+    3.8 |          0 |    8754 | Prime of Miss Jean Brodie, The (1969)                      | Drama
+    3.8 |          0 |  106438 | Philomena (2013)                                           | Comedy|Drama
+    3.8 |          0 |      50 | Usual Suspects, The (1995)                                 | Crime|Mystery|Thriller
+    3.8 |          0 |     759 | Maya Lin: A Strong Clear Vision (1994)                     | Documentary
+    3.8 |          0 |   73290 | Hachiko: A Dog's Story (a.k.a. Hachi: A Dog's Tale) (2009) | Drama
+    3.7 |          0 |   35836 | 40-Year-Old Virgin, The (2005)                             | Comedy|Romance
+    3.7 |          0 |    3897 | Almost Famous (2000)                                       | Drama
+
+--求出电影的相似度
+
+  --将稀疏评分矩阵转换成以movieid为rowid的密集矩阵，计算每个movie上评分向量之间的夹角来计算相似度
+  SELECT madlib.matrix_densify('ratings100kml', 'row="mlid", col=useid, val=rating',
+                              'ratings100kml_movie');
+  --查看生成的矩阵
+  select madlib.matrix_ndims('ratings100kml_movie','row=mlid, val=rating');
+   matrix_ndims 
+  --------------
+   {9066,671}
+  --计算电影的相似度
+  生成某个电影和其它电影的相似度
+select t.mlid,s.mlid,madlib.cosine_similarity(t.rating,s.rating) as sim           
+  from ratings100kml_movie t,ratings100kml_movie s  
+  where t.mlid=1
+  order by sim desc;
+ mlid | mlid |        sim        
+------+------+-------------------
+    1 |    1 |                 1
+    1 |  383 | 0.985292539355888
+    1 | 1017 | 0.985263098800495
+    1 |  296 |  0.98519836681063
+    1 | 8586 |   0.9849806056546
+    1 | 1449 |  0.98487853946488
+    1 | 7824 | 0.984856985844692
+    1 | 3838 | 0.984712658285672
+    1 |  634 |  0.98463748961411
+    1 | 5916 | 0.984604275760795
+    1 | 2212 | 0.984554185842966
+    1 | 8383 | 0.984544312475862
+  
+--求出用户的相似度
+  --将稀疏评分矩阵转换成以userid为rowid的密集矩阵，计算每个user上评分向量之间的夹角来计算相似度
+  SELECT madlib.matrix_densify('ratings100kml', 'row="useid", col=mlid, val=rating',
+                              'ratings100kml_user');
+  --查看生成的矩阵
+  select madlib.matrix_ndims('ratings100kml_user','row=useid, val=rating');
+   matrix_ndims 
+   --------------
+    {671,9066}
+
+  --计算电影的相似度
+  --生成某个用户和其它用户的相似度
+select t.useid,s.useid,madlib.cosine_similarity(t.rating,s.rating) as sim
+  from ratings100kml_user t,ratings100kml_user s
+  where t.useid=1
+  order by sim desc;
+ useid | useid |        sim        
+-------+-------+-------------------
+     1 |     1 |                 1
+     1 |   113 | 0.998110317051059
+     1 |   435 | 0.997871834146785
+     1 |   443 | 0.997836342109379
+     1 |   104 | 0.997802463248035
+     1 |   663 | 0.997756450967415
+     1 |   566 | 0.997748137742039
+     1 |   298 | 0.997746204777706
+     1 |   246 | 0.997735088088766
+     1 |   446 | 0.997726995473673
