@@ -19,8 +19,11 @@ yum install postgresql96-server postgresql96-contrib postgresql96-devel postgres
 service postgresql-9.6 initdb
 不行的话用这个
 /usr/pgsql-9.6/bin/postgresql96-setup initdb
+或者/usr/pgsql-9.6/bin/pg_ctl initdb -D /data/postgres
 4.将数据库加入自启
-chkconfig postgresql-9.6 on service postgresql-9.6 start
+chkconfig postgresql-9.6 on
+service postgresql-9.6 start
+如果手动初始化，需要在/etc/init.d/postgresql-9.6中修改PGDATA变量的路径
 5.设置访问白名单
 cd /var/lib/pgsql/9.6/data
 vim pg_hba.conf
